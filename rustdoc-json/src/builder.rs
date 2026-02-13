@@ -88,6 +88,7 @@ fn cargo_rustdoc_command(options: &Builder) -> Result<Command, BuildError> {
         all_features,
         features,
         package,
+        packages: _,
         package_target,
         document_private_items,
         cap_lints,
@@ -161,6 +162,214 @@ fn cargo_rustdoc_command(options: &Builder) -> Result<Command, BuildError> {
     }
     command.envs(envs);
     Ok(command)
+}
+
+/// Construct a `cargo doc` command for building rustdoc JSON. Unlike
+/// `cargo rustdoc`, `cargo doc` supports multiple `-p` flags, allowing cargo to
+/// build documentation for multiple packages in parallel.
+///
+/// Rustdoc-specific flags are passed via the `RUSTDOCFLAGS` environment variable
+/// instead of after `--`. The command typically looks something like:
+/// ```bash
+/// RUSTDOCFLAGS="-Z unstable-options --output-format json --cap-lints warn" \
+///     cargo +nightly doc --lib -p pkg1 -p pkg2 --no-deps --manifest-path Cargo.toml
+/// ```
+fn cargo_doc_command(options: &Builder) -> Result<Command, BuildError> {
+    let Builder {
+        toolchain: requested_toolchain,
+        manifest_path,
+        target_dir,
+        target,
+        quiet,
+        silent,
+        color,
+        no_default_features,
+        all_features,
+        features,
+        package,
+        packages,
+        package_target,
+        document_private_items,
+        cap_lints,
+        envs,
+    } = options;
+
+    // cargo doc doesn't support --test or --bench targets
+    match package_target {
+        PackageTarget::Test(_) | PackageTarget::Bench(_) => {
+            return Err(BuildError::General(
+                "cargo doc does not support --test or --bench targets. Use build() instead."
+                    .to_string(),
+            ));
+        }
+        _ => {}
+    }
+
+    let mut command = match OVERRIDDEN_TOOLCHAIN.or(requested_toolchain.as_deref()) {
+        None => Command::new("cargo"),
+        Some(toolchain) => {
+            if !rustup_installed() {
+                return Err(BuildError::General(String::from(
+                    "required program rustup not found in PATH. Is it installed?",
+                )));
+            }
+            let mut cmd = Command::new("rustup");
+            cmd.args(["run", toolchain, "cargo"]);
+            cmd
+        }
+    };
+
+    command.arg("doc");
+    match package_target {
+        PackageTarget::Lib => command.arg("--lib"),
+        PackageTarget::Bin(target) => command.args(["--bin", target]),
+        PackageTarget::Example(target) => command.args(["--example", target]),
+        PackageTarget::Test(_) | PackageTarget::Bench(_) => unreachable!(),
+    };
+    command.arg("--no-deps");
+    if let Some(target_dir) = target_dir {
+        command.arg("--target-dir");
+        command.arg(target_dir);
+    }
+    if *quiet {
+        command.arg("--quiet");
+    }
+    if *silent {
+        command.stdout(std::process::Stdio::null());
+        command.stderr(std::process::Stdio::null());
+    }
+    match *color {
+        Color::Always => command.arg("--color").arg("always"),
+        Color::Never => command.arg("--color").arg("never"),
+        Color::Auto => command.arg("--color").arg("auto"),
+    };
+    command.arg("--manifest-path");
+    command.arg(manifest_path);
+    if let Some(target) = target {
+        command.arg("--target");
+        command.arg(target);
+    }
+    if *no_default_features {
+        command.arg("--no-default-features");
+    }
+    if *all_features {
+        command.arg("--all-features");
+    }
+    for feature in features {
+        command.args(["--features", feature]);
+    }
+    // Add all packages from the packages list
+    for pkg in packages {
+        command.args(["-p", pkg]);
+    }
+    // Also add single package if set (and not already in packages list)
+    if let Some(package) = package {
+        if !packages.contains(package) {
+            command.args(["-p", package]);
+        }
+    }
+
+    // Build RUSTDOCFLAGS string for rustdoc-specific options
+    let mut rustdocflags = String::from("-Z unstable-options --output-format json");
+    if *document_private_items {
+        rustdocflags.push_str(" --document-private-items");
+    }
+    if let Some(cap_lints) = cap_lints {
+        rustdocflags.push_str(" --cap-lints ");
+        rustdocflags.push_str(cap_lints);
+    }
+
+    // Set user env vars first, then RUSTDOCFLAGS (so ours takes precedence)
+    command.envs(envs);
+    command.env("RUSTDOCFLAGS", &rustdocflags);
+    Ok(command)
+}
+
+fn run_cargo_doc<O, E>(
+    options: Builder,
+    capture_output: Option<CaptureOutput<O, E>>,
+) -> Result<Vec<PathBuf>, BuildError>
+where
+    O: Write,
+    E: Write,
+{
+    let mut cmd = cargo_doc_command(&options)?;
+    info!("Running {cmd:?}");
+
+    let status = match capture_output {
+        Some(CaptureOutput {
+            mut stdout,
+            mut stderr,
+        }) => {
+            let output = cmd.output().map_err(|e| {
+                BuildError::CommandExecutionError(format!("Failed to run `{cmd:?}`: {e}"))
+            })?;
+            stdout.write_all(&output.stdout).map_err(|e| {
+                BuildError::CapturedOutputError(format!("Failed to write stdout: {e}"))
+            })?;
+            stderr.write_all(&output.stderr).map_err(|e| {
+                BuildError::CapturedOutputError(format!("Failed to write stderr: {e}"))
+            })?;
+            output.status
+        }
+        None => cmd.status().map_err(|e| {
+            BuildError::CommandExecutionError(format!("Failed to run `{cmd:?}`: {e}"))
+        })?,
+    };
+
+    if status.success() {
+        resolve_cargo_doc_json_paths(&options)
+    } else {
+        let manifest = cargo_manifest::Manifest::from_path(&options.manifest_path)?;
+        if manifest.package.is_none()
+            && manifest.workspace.is_some()
+            && options.packages.is_empty()
+            && options.package.is_none()
+        {
+            Err(BuildError::VirtualManifest(options.manifest_path))
+        } else {
+            Err(BuildError::BuildRustdocJsonError)
+        }
+    }
+}
+
+/// Resolve the paths to the generated rustdoc JSON files for all packages
+/// that were built by `cargo doc`.
+fn resolve_cargo_doc_json_paths(options: &Builder) -> Result<Vec<PathBuf>, BuildError> {
+    // Collect all package names that will be built
+    let mut all_packages: Vec<&str> = options.packages.iter().map(|s| s.as_str()).collect();
+    if let Some(package) = &options.package {
+        if !all_packages.contains(&package.as_str()) {
+            all_packages.push(package.as_str());
+        }
+    }
+
+    if all_packages.is_empty() {
+        // No explicit packages - build the default package from the manifest
+        let path = rustdoc_json_path_for_manifest_path(
+            &options.manifest_path,
+            None,
+            &options.package_target,
+            options.target_dir.as_deref(),
+            options.target.as_deref(),
+        )?;
+        return Ok(vec![path]);
+    }
+
+    // For explicit packages, resolve each one
+    let mut paths = Vec::with_capacity(all_packages.len());
+    for pkg in &all_packages {
+        let path = rustdoc_json_path_for_manifest_path(
+            &options.manifest_path,
+            Some(pkg),
+            &options.package_target,
+            options.target_dir.as_deref(),
+            options.target.as_deref(),
+        )?;
+        paths.push(path);
+    }
+
+    Ok(paths)
 }
 
 /// Returns `./target/doc/crate_name.json`. Also takes care of transforming
@@ -280,6 +489,7 @@ pub struct Builder {
     all_features: bool,
     features: Vec<String>,
     package: Option<String>,
+    packages: Vec<String>,
     package_target: PackageTarget,
     document_private_items: bool,
     cap_lints: Option<String>,
@@ -300,6 +510,7 @@ impl Default for Builder {
             all_features: false,
             features: vec![],
             package: None,
+            packages: vec![],
             package_target: PackageTarget::default(),
             document_private_items: false,
             cap_lints: Some(String::from("warn")),
@@ -416,6 +627,18 @@ impl Builder {
         self
     }
 
+    /// Set multiple packages to build. When using [`Self::build_using_cargo_doc()`],
+    /// all specified packages will be built in a single `cargo doc` invocation,
+    /// allowing cargo to parallelize the work.
+    #[must_use]
+    pub fn packages<I: IntoIterator<Item = S>, S: AsRef<str>>(mut self, packages: I) -> Self {
+        self.packages = packages
+            .into_iter()
+            .map(|item| item.as_ref().to_owned())
+            .collect();
+        self
+    }
+
     /// What part of the package to document. Default: `PackageTarget::Lib`
     #[must_use]
     pub fn package_target(mut self, package_target: PackageTarget) -> Self {
@@ -505,6 +728,50 @@ impl Builder {
     ) -> Result<PathBuf, BuildError> {
         let capture_output = CaptureOutput { stdout, stderr };
         run_cargo_rustdoc(self, Some(capture_output))
+    }
+
+    /// Generate rustdoc JSON using `cargo doc` instead of `cargo rustdoc`.
+    ///
+    /// The key advantage is that `cargo doc` supports multiple `-p` flags,
+    /// allowing cargo to build rustdoc JSON for multiple packages in parallel.
+    /// Use [`Self::packages()`] to specify which packages to build.
+    ///
+    /// Rustdoc flags are passed via the `RUSTDOCFLAGS` environment variable,
+    /// and `--no-deps` is added to avoid documenting dependencies.
+    ///
+    /// Returns the paths to the generated rustdoc JSON files.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// let json_paths = rustdoc_json::Builder::default()
+    ///     .toolchain("nightly")
+    ///     .manifest_path("Cargo.toml")
+    ///     .packages(["crate-a", "crate-b", "crate-c"])
+    ///     .build_using_cargo_doc()
+    ///     .unwrap();
+    ///
+    /// for path in &json_paths {
+    ///     println!("Built rustdoc JSON: {:?}", path);
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if building fails, if the manifest path is invalid,
+    /// or if `--test` / `--bench` targets are requested (not supported by `cargo doc`).
+    pub fn build_using_cargo_doc(self) -> Result<Vec<PathBuf>, BuildError> {
+        run_cargo_doc::<std::io::Sink, std::io::Sink>(self, None)
+    }
+
+    /// Like [`Self::build_using_cargo_doc()`] but captures stdout and stderr.
+    pub fn build_using_cargo_doc_with_captured_output(
+        self,
+        stdout: impl Write,
+        stderr: impl Write,
+    ) -> Result<Vec<PathBuf>, BuildError> {
+        let capture_output = CaptureOutput { stdout, stderr };
+        run_cargo_doc(self, Some(capture_output))
     }
 }
 
