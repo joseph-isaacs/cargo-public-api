@@ -9,6 +9,7 @@ use rustdoc_types::{
 };
 use std::{
     collections::{HashMap, VecDeque},
+    rc::Rc,
     vec,
 };
 
@@ -22,7 +23,7 @@ use std::{
 #[derive(Debug)]
 struct UnprocessedItem<'c> {
     /// The path to the item to process.
-    parent_path: Vec<PathComponent<'c>>,
+    parent_path: Vec<Rc<PathComponent<'c>>>,
 
     /// The Id of the item's logical parent (if any).
     parent_id: Option<Id>,
@@ -75,7 +76,7 @@ impl<'c> ItemProcessor<'c> {
     /// groupings (enums, impls, etc).
     fn add_to_work_queue(
         &mut self,
-        parent_path: Vec<PathComponent<'c>>,
+        parent_path: Vec<Rc<PathComponent<'c>>>,
         parent_id: Option<Id>,
         id: Id,
     ) {
@@ -255,7 +256,7 @@ impl<'c> ItemProcessor<'c> {
         for &id in impls {
             let mut path = finished_item.path().to_vec();
             for a in &mut path {
-                a.hide = true;
+                Rc::make_mut(a).hide = true;
             }
             self.add_to_work_queue(path, Some(item.id), id);
         }
@@ -268,7 +269,7 @@ impl<'c> ItemProcessor<'c> {
     /// which case we need to break the recursion.
     fn get_item_if_not_in_path(
         &mut self,
-        parent_path: &[PathComponent<'c>],
+        parent_path: &[Rc<PathComponent<'c>>],
         id: Id,
     ) -> Option<&'c Item> {
         if parent_path.iter().any(|m| m.item.item.id == id) {
@@ -311,7 +312,7 @@ impl<'c> UnprocessedItem<'c> {
         let mut path = self.parent_path.split_off(0);
 
         // Complete the path with the last item
-        path.push(PathComponent {
+        path.push(Rc::new(PathComponent {
             item: NameableItem {
                 item,
                 overridden_name,
@@ -319,7 +320,7 @@ impl<'c> UnprocessedItem<'c> {
             },
             type_,
             hide: false,
-        });
+        }));
 
         // Done
         IntermediatePublicItem::new(path, self.parent_id, item.id)

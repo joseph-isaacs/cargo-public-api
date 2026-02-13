@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use rustdoc_types::{Id, Item};
 
 use crate::nameable_item::NameableItem;
@@ -12,13 +14,13 @@ use crate::tokens::Token;
 /// one [`crate::PublicItem`].
 #[derive(Clone, Debug)]
 pub struct IntermediatePublicItem<'c> {
-    path: Vec<PathComponent<'c>>,
+    path: Vec<Rc<PathComponent<'c>>>,
     parent_id: Option<Id>,
     id: Id,
 }
 
 impl<'c> IntermediatePublicItem<'c> {
-    pub fn new(path: Vec<PathComponent<'c>>, parent_id: Option<Id>, id: Id) -> Self {
+    pub fn new(path: Vec<Rc<PathComponent<'c>>>, parent_id: Option<Id>, id: Id) -> Self {
         Self {
             path,
             parent_id,
@@ -36,7 +38,7 @@ impl<'c> IntermediatePublicItem<'c> {
     }
 
     #[must_use]
-    pub fn path(&self) -> &[PathComponent<'c>] {
+    pub fn path(&self) -> &[Rc<PathComponent<'c>>] {
         &self.path
     }
 

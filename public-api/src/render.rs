@@ -4,7 +4,7 @@ use crate::intermediate_public_item::IntermediatePublicItem;
 use crate::nameable_item::NameableItem;
 use crate::path_component::PathComponent;
 use crate::tokens::Token;
-use std::{borrow::Cow, cmp::Ordering, collections::HashMap};
+use std::{borrow::Cow, cmp::Ordering, collections::HashMap, rc::Rc};
 
 use rustdoc_types::{
     Abi, AssocItemConstraint, AssocItemConstraintKind, Attribute, AttributeRepr, Constant, Crate,
@@ -259,7 +259,7 @@ impl<'c> RenderingContext<'c> {
         resolved_fields
     }
 
-    fn render_simple(&self, tags: &[&str], path: &[PathComponent]) -> Vec<Token> {
+    fn render_simple(&self, tags: &[&str], path: &[Rc<PathComponent>]) -> Vec<Token> {
         let mut output = pub_();
         output.extend(
             tags.iter()
@@ -270,7 +270,7 @@ impl<'c> RenderingContext<'c> {
         output
     }
 
-    fn render_path(&self, path: &[PathComponent]) -> Vec<Token> {
+    fn render_path(&self, path: &[Rc<PathComponent>]) -> Vec<Token> {
         let mut output = vec![];
         for component in path {
             if component.hide {
@@ -412,7 +412,7 @@ impl<'c> RenderingContext<'c> {
         }
     }
 
-    fn render_trait(&self, trait_: &Trait, path: &[PathComponent]) -> Vec<Token> {
+    fn render_trait(&self, trait_: &Trait, path: &[Rc<PathComponent>]) -> Vec<Token> {
         let mut output = pub_();
         if trait_.is_unsafe {
             output.extend(vec![Token::qualifier("unsafe"), ws!()]);
@@ -661,7 +661,7 @@ impl<'c> RenderingContext<'c> {
     pub(crate) fn render_impl(
         &self,
         impl_: &Impl,
-        path: &[PathComponent],
+        path: &[Rc<PathComponent>],
         disregard_negativity: bool,
     ) -> Vec<Token> {
         let mut output = vec![];
