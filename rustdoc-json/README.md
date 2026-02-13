@@ -17,6 +17,27 @@ let json_path = rustdoc_json::Builder::default()
 println!("Wrote rustdoc JSON to {:?}", &json_path);
 ```
 
+## Build rustdoc JSON for multiple packages in parallel
+
+To build rustdoc JSON for multiple workspace packages in a single invocation
+(allowing cargo to parallelize the work), use `build_using_cargo_doc()`:
+
+```rust
+let json_paths = rustdoc_json::Builder::default()
+    .toolchain("nightly")
+    .manifest_path("workspace/Cargo.toml")
+    .packages(["crate-a", "crate-b", "crate-c"])
+    .build_using_cargo_doc()
+    .unwrap();
+
+for path in &json_paths {
+    println!("Wrote rustdoc JSON to {:?}", path);
+}
+```
+
+This uses `cargo doc` with `RUSTDOCFLAGS` instead of `cargo rustdoc`, which
+supports multiple `-p` flags and lets cargo build packages in parallel.
+
 There are many more build options. See the [docs](https://docs.rs/rustdoc-json/latest/rustdoc_json/struct.Builder.html) to learn about all of them.
 
 ## Tests

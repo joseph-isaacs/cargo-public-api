@@ -805,4 +805,117 @@ mod tests {
             assert!(OVERRIDDEN_TOOLCHAIN.is_none());
         }
     }
+
+    #[test]
+    fn cargo_doc_command_rejects_test_target() {
+        let builder = Builder::default().package_target(PackageTarget::Test("test".into()));
+        let result = cargo_doc_command(&builder);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("cargo doc does not support --test or --bench"),
+            "Got: {err}"
+        );
+    }
+
+    #[test]
+    fn cargo_doc_command_rejects_bench_target() {
+        let builder = Builder::default().package_target(PackageTarget::Bench("bench".into()));
+        let result = cargo_doc_command(&builder);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("cargo doc does not support --test or --bench"),
+            "Got: {err}"
+        );
+    }
+
+    #[test]
+    fn cargo_doc_command_accepts_lib_target() {
+        let builder = Builder::default();
+        let result = cargo_doc_command(&builder);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn cargo_doc_command_deduplicates_packages() {
+        let builder = Builder::default()
+            .packages(["my-crate"])
+            .package("my-crate");
+        let cmd = cargo_doc_command(&builder).unwrap();
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        // Should only have one "-p my-crate", not two
+        let p_count = args.windows(2).filter(|w| w[0] == "-p" && w[1] == "my-crate").count();
+        assert_eq!(p_count, 1, "Expected 1 '-p my-crate' but got {p_count}. Args: {args:?}");
+    }
+
+    #[test]
+    fn cargo_doc_command_includes_no_deps() {
+        let builder = Builder::default();
+        let cmd = cargo_doc_command(&builder).unwrap();
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert!(args.contains(&"--no-deps".to_string()), "Missing --no-deps. Args: {args:?}");
+    }
+
+    #[test]
+    fn cargo_doc_command_sets_rustdocflags() {
+        let builder = Builder::default().cap_lints(Some("warn")).document_private_items(true);
+        let cmd = cargo_doc_command(&builder).unwrap();
+        let envs: Vec<_> = cmd.get_envs().collect();
+        let rustdocflags = envs
+            .iter()
+            .find(|(k, _)| *k == "RUSTDOCFLAGS")
+            .expect("RUSTDOCFLAGS not set");
+        let value = rustdocflags.1.unwrap().to_string_lossy();
+        assert!(
+            value.contains("--output-format json"),
+            "Missing --output-format json in RUSTDOCFLAGS: {value}"
+        );
+        assert!(
+            value.contains("-Z unstable-options"),
+            "Missing -Z unstable-options in RUSTDOCFLAGS: {value}"
+        );
+        assert!(
+            value.contains("--cap-lints warn"),
+            "Missing --cap-lints warn in RUSTDOCFLAGS: {value}"
+        );
+        assert!(
+            value.contains("--document-private-items"),
+            "Missing --document-private-items in RUSTDOCFLAGS: {value}"
+        );
+    }
+
+    #[test]
+    fn cargo_doc_command_uses_doc_not_rustdoc() {
+        let builder = Builder::default();
+        let cmd = cargo_doc_command(&builder).unwrap();
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert!(args.contains(&"doc".to_string()), "Missing 'doc' arg. Args: {args:?}");
+        assert!(!args.contains(&"rustdoc".to_string()), "Should not contain 'rustdoc'. Args: {args:?}");
+    }
+
+    #[test]
+    fn cargo_doc_command_multiple_packages() {
+        let builder = Builder::default().packages(["crate-a", "crate-b", "crate-c"]);
+        let cmd = cargo_doc_command(&builder).unwrap();
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        let pkg_args: Vec<_> = args
+            .windows(2)
+            .filter(|w| w[0] == "-p")
+            .map(|w| w[1].clone())
+            .collect();
+        assert_eq!(pkg_args, vec!["crate-a", "crate-b", "crate-c"]);
+    }
 }
