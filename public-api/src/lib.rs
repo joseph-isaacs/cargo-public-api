@@ -176,8 +176,8 @@ impl Builder {
     ///
     /// If `true`, function parameter names are omitted from the output.
     /// ```
-    //  pub fn public_api::Builder::omit_param_names(self, bool) -> Self
-    //  ```
+    /// pub fn public_api::Builder::omit_param_names(self, bool) -> Self
+    /// ```
     #[must_use]
     pub fn omit_param_names(mut self, omit_param_names: bool) -> Self {
         self.options.omit_param_names = omit_param_names;
