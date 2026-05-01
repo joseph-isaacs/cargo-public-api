@@ -170,12 +170,12 @@ impl Builder {
     }
 
     /// If `false` (default), function parameter names are contained in the output.
-    /// ```
+    /// ```text
     /// pub fn public_api::Builder::omit_param_names(self, omit_param_names: bool) -> Self
     /// ```
     ///
     /// If `true`, function parameter names are omitted from the output.
-    /// ```
+    /// ```text
     /// pub fn public_api::Builder::omit_param_names(self, bool) -> Self
     /// ```
     #[must_use]
