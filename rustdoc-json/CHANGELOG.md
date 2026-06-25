@@ -1,5 +1,14 @@
 # rustdoc-json
 
+## Unreleased
+* Add `rustdoc_json::Builder::build_using_cargo_doc()` and `Builder::packages()` for building
+  rustdoc JSON for multiple workspace packages in a single `cargo doc` invocation. This allows
+  cargo to parallelize the builds, which is significantly faster for workspaces with many crates.
+  Unlike `build()` which uses `cargo rustdoc` (one package at a time), this uses `cargo doc` with
+  `RUSTDOCFLAGS` and multiple `-p` flags.
+* Add `rustdoc_json::Builder::build_using_cargo_doc_with_captured_output()` for the same but
+  with stdout/stderr capture.
+
 ## v0.9.8
 * Add `rustdoc_json::Builder::env()` which simply forwards to underlying `Command::env()`.
 

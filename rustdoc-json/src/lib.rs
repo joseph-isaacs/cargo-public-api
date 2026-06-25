@@ -14,6 +14,20 @@
 //! println!("Built and wrote rustdoc JSON to {:?}", &json_path);
 //! ```
 //!
+//! # Building multiple packages in parallel
+//!
+//! Use [`Builder::build_using_cargo_doc()`] with [`Builder::packages()`] to build
+//! rustdoc JSON for multiple workspace packages in a single `cargo doc` invocation:
+//!
+//! ```no_run
+//! let json_paths = rustdoc_json::Builder::default()
+//!     .toolchain("nightly")
+//!     .manifest_path("workspace/Cargo.toml")
+//!     .packages(["crate-a", "crate-b", "crate-c"])
+//!     .build_using_cargo_doc()
+//!     .unwrap();
+//! ```
+//!
 //! A compilable example can be found
 //! [here](https://github.com/cargo-public-api/cargo-public-api/blob/main/rustdoc-json/examples/build-rustdoc-json.rs)
 
